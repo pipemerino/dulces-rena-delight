@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -25,9 +25,20 @@ import {
   TrendingUp,
   UserRound,
   UsersRound,
+  BrainCircuit,
+  Copy,
+  Link2,
+  Loader2,
+  LogOut,
+  MessageCircle,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import { analyzeBusiness } from "@/lib/rena-ai.functions";
+import { attendAlert, createCashierLink, getCashierData, getOwnerData, initializeOwner, saveDelivery, setWhatsAppStatus, submitCashierAlert, updateSettings } from "@/lib/rena.functions";
 
 type Screen = "welcome" | "owner" | "cashier";
 type OwnerTab = "delivery" | "summary" | "alerts" | "settings";
@@ -94,10 +105,18 @@ function SweetBackdrop() {
 }
 
 function DulcesRenaApp() {
-  const [screen, setScreen] = useState<Screen>("welcome");
-  if (screen === "owner") return <OwnerApp onExit={() => setScreen("welcome")} />;
-  if (screen === "cashier") return <CashierApp onExit={() => setScreen("welcome")} />;
-  return <WelcomeScreen onOwner={() => setScreen("owner")} onCashier={() => setScreen("cashier")} />;
+  const cashierToken = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("cajera") ?? "";
+  const [screen, setScreen] = useState<Screen>(cashierToken ? "cashier" : "welcome");
+  const [sessionReady, setSessionReady] = useState(false);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => { if (data.session && !cashierToken) setScreen("owner"); setSessionReady(true); });
+    const { data } = supabase.auth.onAuthStateChange((event, session) => { if (event === "SIGNED_IN" && session && !cashierToken) setScreen("owner"); if (event === "SIGNED_OUT") setScreen("welcome"); });
+    return () => data.subscription.unsubscribe();
+  }, [cashierToken]);
+  if (!sessionReady && !cashierToken) return <main className="grid min-h-dvh place-items-center bg-background"><Loader2 className="size-7 animate-spin text-primary" /></main>;
+  if (screen === "owner") return <OwnerApp onExit={async () => { await supabase.auth.signOut(); setScreen("welcome"); }} />;
+  if (screen === "cashier") return <CashierApp token={cashierToken} onExit={() => { window.history.replaceState({}, "", "/"); setScreen("welcome"); }} />;
+  return <WelcomeScreen onOwner={async () => { const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin, extraParams: { prompt: "select_account" } }); if (!result.error && !result.redirected) setScreen("owner"); }} onCashier={() => setScreen("cashier")} />;
 }
 
 function WelcomeScreen({ onOwner, onCashier }: { onOwner: () => void; onCashier: () => void }) {
@@ -122,12 +141,12 @@ function WelcomeScreen({ onOwner, onCashier }: { onOwner: () => void; onCashier:
             <span className="grid size-6 place-items-center rounded-full bg-primary-foreground font-bold text-primary">G</span>
             Entrar como dueña
           </Button>
-          <Button onClick={onCashier} variant="outline" size="lg" className="h-14 w-full rounded-xl border-2 text-base">
+          <Button onClick={onCashier} variant="outline" size="lg" className="h-14 w-full rounded-xl border-2 text-base" disabled>
             <Store className="size-5" />
             Soy cajera de la tienda
           </Button>
           <p className="pt-2 text-center text-xs leading-relaxed text-muted-foreground">
-            Las cajeras no necesitan contraseña.
+            Las cajeras entran desde el enlace privado de la tienda.
           </p>
         </div>
       </section>
@@ -137,6 +156,10 @@ function WelcomeScreen({ onOwner, onCashier }: { onOwner: () => void; onCashier:
 
 function OwnerApp({ onExit }: { onExit: () => void }) {
   const [tab, setTab] = useState<OwnerTab>("delivery");
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+  const refresh = async () => { try { setError(""); await initializeOwner(); setData(await getOwnerData()); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudieron cargar los datos."); } };
+  useEffect(() => { void refresh(); }, []);
   const tabs = [
     { id: "delivery" as const, label: "Entregas", icon: ReceiptText },
     { id: "summary" as const, label: "Resumen", icon: TrendingUp },
@@ -155,10 +178,13 @@ function OwnerApp({ onExit }: { onExit: () => void }) {
         </div>
       </header>
       <div className="mx-auto max-w-5xl px-4 pb-8 pt-6 sm:px-6">
-        {tab === "delivery" && <DeliveryView />}
-        {tab === "summary" && <SummaryView />}
-        {tab === "alerts" && <AlertsView />}
-        {tab === "settings" && <SettingsView />}
+        {error && <div className="mb-4 rounded-xl bg-warning-soft p-4 text-sm text-warning">{error} <Button variant="ghost" size="sm" onClick={refresh}><RefreshCw /> Reintentar</Button></div>}
+        {!data ? <div className="grid min-h-64 place-items-center"><Loader2 className="size-7 animate-spin text-primary" /></div> : <>
+        {tab === "delivery" && <DeliveryView products={data.products} onSaved={refresh} />}
+        {tab === "summary" && <SummaryView data={data} />}
+        {tab === "alerts" && <AlertsView alerts={data.alerts} onChanged={refresh} />}
+        {tab === "settings" && <SettingsView settings={data.settings} onChanged={refresh} onExit={onExit} />}
+        </>}
       </div>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-lg">
         <div className="mx-auto grid max-w-lg grid-cols-4 px-2">
