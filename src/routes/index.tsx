@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -25,9 +25,20 @@ import {
   TrendingUp,
   UserRound,
   UsersRound,
+  BrainCircuit,
+  Copy,
+  Link2,
+  Loader2,
+  LogOut,
+  MessageCircle,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import { analyzeBusiness } from "@/lib/rena-ai.functions";
+import { attendAlert, createCashierLink, getCashierData, getOwnerData, initializeOwner, saveDelivery, setWhatsAppStatus, submitCashierAlert, updateSettings } from "@/lib/rena.functions";
 
 type Screen = "welcome" | "owner" | "cashier";
 type OwnerTab = "delivery" | "summary" | "alerts" | "settings";
@@ -94,10 +105,18 @@ function SweetBackdrop() {
 }
 
 function DulcesRenaApp() {
-  const [screen, setScreen] = useState<Screen>("welcome");
-  if (screen === "owner") return <OwnerApp onExit={() => setScreen("welcome")} />;
-  if (screen === "cashier") return <CashierApp onExit={() => setScreen("welcome")} />;
-  return <WelcomeScreen onOwner={() => setScreen("owner")} onCashier={() => setScreen("cashier")} />;
+  const cashierToken = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("cajera") ?? "";
+  const [screen, setScreen] = useState<Screen>(cashierToken ? "cashier" : "welcome");
+  const [sessionReady, setSessionReady] = useState(false);
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => { if (data.session && !cashierToken) setScreen("owner"); setSessionReady(true); });
+    const { data } = supabase.auth.onAuthStateChange((event, session) => { if (event === "SIGNED_IN" && session && !cashierToken) setScreen("owner"); if (event === "SIGNED_OUT") setScreen("welcome"); });
+    return () => data.subscription.unsubscribe();
+  }, [cashierToken]);
+  if (!sessionReady && !cashierToken) return <main className="grid min-h-dvh place-items-center bg-background"><Loader2 className="size-7 animate-spin text-primary" /></main>;
+  if (screen === "owner") return <OwnerApp onExit={async () => { await supabase.auth.signOut(); setScreen("welcome"); }} />;
+  if (screen === "cashier") return <CashierApp token={cashierToken} onExit={() => { window.history.replaceState({}, "", "/"); setScreen("welcome"); }} />;
+  return <WelcomeScreen onOwner={async () => { const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin, extraParams: { prompt: "select_account" } }); if (!result.error && !result.redirected) setScreen("owner"); }} onCashier={() => setScreen("cashier")} />;
 }
 
 function WelcomeScreen({ onOwner, onCashier }: { onOwner: () => void; onCashier: () => void }) {
@@ -122,12 +141,12 @@ function WelcomeScreen({ onOwner, onCashier }: { onOwner: () => void; onCashier:
             <span className="grid size-6 place-items-center rounded-full bg-primary-foreground font-bold text-primary">G</span>
             Entrar como dueña
           </Button>
-          <Button onClick={onCashier} variant="outline" size="lg" className="h-14 w-full rounded-xl border-2 text-base">
+          <Button onClick={onCashier} variant="outline" size="lg" className="h-14 w-full rounded-xl border-2 text-base" disabled>
             <Store className="size-5" />
             Soy cajera de la tienda
           </Button>
           <p className="pt-2 text-center text-xs leading-relaxed text-muted-foreground">
-            Las cajeras no necesitan contraseña.
+            Las cajeras entran desde el enlace privado de la tienda.
           </p>
         </div>
       </section>
@@ -137,6 +156,10 @@ function WelcomeScreen({ onOwner, onCashier }: { onOwner: () => void; onCashier:
 
 function OwnerApp({ onExit }: { onExit: () => void }) {
   const [tab, setTab] = useState<OwnerTab>("delivery");
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+  const refresh = async () => { try { setError(""); await initializeOwner(); setData(await getOwnerData()); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudieron cargar los datos."); } };
+  useEffect(() => { void refresh(); }, []);
   const tabs = [
     { id: "delivery" as const, label: "Entregas", icon: ReceiptText },
     { id: "summary" as const, label: "Resumen", icon: TrendingUp },
@@ -155,10 +178,13 @@ function OwnerApp({ onExit }: { onExit: () => void }) {
         </div>
       </header>
       <div className="mx-auto max-w-5xl px-4 pb-8 pt-6 sm:px-6">
-        {tab === "delivery" && <DeliveryView />}
-        {tab === "summary" && <SummaryView />}
-        {tab === "alerts" && <AlertsView />}
-        {tab === "settings" && <SettingsView />}
+        {error && <div className="mb-4 rounded-xl bg-warning-soft p-4 text-sm text-warning">{error} <Button variant="ghost" size="sm" onClick={refresh}><RefreshCw /> Reintentar</Button></div>}
+        {!data ? <div className="grid min-h-64 place-items-center"><Loader2 className="size-7 animate-spin text-primary" /></div> : <>
+        {tab === "delivery" && <DeliveryView products={data.products} onSaved={refresh} />}
+        {tab === "summary" && <SummaryView data={data} />}
+        {tab === "alerts" && <AlertsView alerts={data.alerts} onChanged={refresh} />}
+        {tab === "settings" && <SettingsView settings={data.settings} onChanged={refresh} onExit={onExit} />}
+        </>}
       </div>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card/95 pb-[max(0.65rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-lg">
         <div className="mx-auto grid max-w-lg grid-cols-4 px-2">
@@ -187,21 +213,24 @@ function SectionHeader({ eyebrow, title, copy }: { eyebrow: string; title: strin
   );
 }
 
-function DeliveryView() {
-  const [counts, setCounts] = useState(initialCounts);
+function DeliveryView({ products, onSaved }: { products: any[]; onSaved: () => Promise<void> }) {
+  const [counts, setCounts] = useState<Record<string, number>>(() => Object.fromEntries(products.map((product) => [product.id, 0])));
   const [payment, setPayment] = useState<PaymentState>("pending");
-  const [paidAmount, setPaidAmount] = useState(18000);
+  const [paidAmount, setPaidAmount] = useState(0);
   const [saved, setSaved] = useState(false);
-  const total = useMemo(() => sweets.reduce((sum, sweet) => sum + counts[sweet.id] * sweet.price, 0), [counts]);
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+  const total = useMemo(() => products.reduce((sum, product) => sum + (counts[product.id] ?? 0) * product.price, 0), [counts, products]);
 
-  const changeCount = (id: SweetId, delta: number) => {
+  const changeCount = (id: string, delta: number) => {
     setSaved(false);
     setCounts((current) => ({ ...current, [id]: Math.max(0, current[id] + delta) }));
   };
 
   return (
     <div className="animate-fade">
-      <SectionHeader eyebrow="Jueves, 24 de septiembre" title="Nueva entrega" copy="Anota lo que dejaste hoy en la tienda." />
+       <SectionHeader eyebrow={new Intl.DateTimeFormat("es-CL", { dateStyle: "full" }).format(new Date())} title="Nueva entrega" copy="Anota lo que dejaste hoy en la tienda." />
       <div className="grid gap-5 lg:grid-cols-[1.35fr_.85fr] lg:items-start">
         <section className="surface-card p-4 sm:p-5">
           <div className="mb-4 flex items-center justify-between">
@@ -209,24 +238,24 @@ function DeliveryView() {
               <h2 className="font-display text-lg font-bold">Productos</h2>
               <p className="text-xs text-muted-foreground">Toca + o − para ajustar</p>
             </div>
-            <span className="rounded-full bg-brand-soft px-3 py-1 text-xs font-bold text-primary">28 unidades</span>
+             <span className="rounded-full bg-brand-soft px-3 py-1 text-xs font-bold text-primary">{Object.values(counts).reduce((a, b) => a + b, 0)} unidades</span>
           </div>
           <div className="divide-y divide-border">
-            {sweets.map((sweet) => {
-              const Icon = sweet.icon;
+            {products.map((sweet, index) => {
+              const Icon = index === 2 ? Donut : Cookie;
               return (
                 <div key={sweet.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-4 first:pt-1">
                   <div className="flex min-w-0 items-center gap-3">
-                    <span className={cn("grid size-11 shrink-0 place-items-center rounded-xl text-foreground", sweet.tone)}><Icon className="size-5" /></span>
+                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-brand-soft text-foreground"><Icon className="size-5" /></span>
                     <div className="min-w-0">
                       <p className="truncate text-sm font-bold text-foreground">{sweet.name}</p>
                       <p className="text-xs text-muted-foreground">${sweet.price.toLocaleString("es-CL")} c/u</p>
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-1 rounded-xl border border-border bg-background p-1">
-                    <Button variant="ghost" size="icon" className="size-8 rounded-lg" onClick={() => changeCount(sweet.id, -1)} aria-label={`Quitar ${sweet.shortName}`}><Minus /></Button>
-                    <span className="w-7 text-center font-display text-base font-bold">{counts[sweet.id]}</span>
-                    <Button variant="secondary" size="icon" className="size-8 rounded-lg" onClick={() => changeCount(sweet.id, 1)} aria-label={`Agregar ${sweet.shortName}`}><Plus /></Button>
+                     <Button variant="ghost" size="icon" className="size-8 rounded-lg" onClick={() => changeCount(sweet.id, -1)} aria-label={`Quitar ${sweet.short_name}`}><Minus /></Button>
+                     <span className="w-7 text-center font-display text-base font-bold">{counts[sweet.id] ?? 0}</span>
+                     <Button variant="secondary" size="icon" className="size-8 rounded-lg" onClick={() => changeCount(sweet.id, 1)} aria-label={`Agregar ${sweet.short_name}`}><Plus /></Button>
                   </div>
                 </div>
               );
@@ -241,10 +270,10 @@ function DeliveryView() {
               <h2 className="font-display text-lg font-bold">Ticket de entrega</h2>
             </div>
             <div className="space-y-2.5 py-4">
-              {sweets.filter((s) => counts[s.id] > 0).map((sweet) => (
+              {products.filter((s) => (counts[s.id] ?? 0) > 0).map((sweet) => (
                 <div key={sweet.id} className="grid grid-cols-[1fr_auto] gap-3 text-sm">
-                  <span className="text-muted-foreground">{counts[sweet.id]} × {sweet.shortName}</span>
-                  <span className="font-semibold">${(counts[sweet.id] * sweet.price).toLocaleString("es-CL")}</span>
+                   <span className="text-muted-foreground">{counts[sweet.id]} × {sweet.short_name}</span>
+                   <span className="font-semibold">${((counts[sweet.id] ?? 0) * sweet.price).toLocaleString("es-CL")}</span>
                 </div>
               ))}
             </div>
@@ -256,7 +285,7 @@ function DeliveryView() {
 
           <section className="surface-card space-y-4 p-5">
             <label className="block text-sm font-bold text-foreground">Fecha de entrega
-              <span className="mt-2 flex h-11 items-center gap-2 rounded-xl border border-input bg-background px-3 font-normal"><CalendarDays className="size-4 text-primary" />24/09/2026</span>
+               <span className="mt-2 flex h-11 items-center gap-2 rounded-xl border border-input bg-background px-3 font-normal"><CalendarDays className="size-4 text-primary" />{new Date().toLocaleDateString("es-CL")}</span>
             </label>
             <div>
               <p className="mb-2 text-sm font-bold">¿Te pagaron?</p>
@@ -274,10 +303,11 @@ function DeliveryView() {
               </label>
             )}
             <label className="block text-sm font-bold">Nota <span className="font-normal text-muted-foreground">(opcional)</span>
-              <textarea placeholder="Ej: dejar en vitrina principal" className="mt-2 min-h-20 w-full resize-none rounded-xl border border-input bg-background p-3 font-normal outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15" />
+               <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="Ej: dejar en vitrina principal" className="mt-2 min-h-20 w-full resize-none rounded-xl border border-input bg-background p-3 font-normal outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15" />
             </label>
-            <Button className="h-12 w-full rounded-xl text-base shadow-brand" onClick={() => setSaved(true)}>
-              {saved ? <><CheckCircle2 /> Entrega registrada</> : <><PackageCheck /> Registrar entrega</>}
+             {error && <p className="text-sm text-destructive">{error}</p>}
+             <Button disabled={saving || total === 0} className="h-12 w-full rounded-xl text-base shadow-brand" onClick={async () => { try { setSaving(true); setError(""); await saveDelivery({ data: { deliveredOn: new Date().toISOString().slice(0, 10), note, paymentStatus: payment, paidAmount, items: products.filter((p) => (counts[p.id] ?? 0) > 0).map((p) => ({ productId: p.id, quantity: counts[p.id], unitPrice: p.price })) } }); setSaved(true); await onSaved(); } catch (reason) { setError(reason instanceof Error ? reason.message : "No se pudo guardar."); } finally { setSaving(false); } }}>
+               {saving ? <><Loader2 className="animate-spin" /> Guardando…</> : saved ? <><CheckCircle2 /> Entrega registrada</> : <><PackageCheck /> Registrar entrega</>}
             </Button>
           </section>
         </aside>
@@ -286,26 +316,32 @@ function DeliveryView() {
   );
 }
 
-function SummaryView() {
-  const productBars = [76, 54, 42, 66];
-  const dayBars = [32, 58, 44, 82, 68, 36, 52];
+function SummaryView({ data }: { data: any }) {
+  const month = new Date().toISOString().slice(0, 7);
+  const deliveries = data.deliveries.filter((delivery: any) => delivery.delivered_on.startsWith(month));
+  const delivered = deliveries.reduce((sum: number, item: any) => sum + item.total, 0);
+  const paid = deliveries.reduce((sum: number, item: any) => sum + item.paid_amount, 0);
+  const productCounts = new Map<string, number>();
+  deliveries.forEach((delivery: any) => delivery.delivery_items.forEach((item: any) => productCounts.set(item.product_id, (productCounts.get(item.product_id) ?? 0) + item.quantity)));
+  const maxProduct = Math.max(1, ...productCounts.values());
+  const ranking = Object.entries(data.alerts.reduce((acc: Record<string, number>, alert: any) => ({ ...acc, [alert.product_name]: (acc[alert.product_name] ?? 0) + 1 }), {})).sort((a: any, b: any) => b[1] - a[1]);
   return (
     <div className="animate-fade">
-      <SectionHeader eyebrow="Septiembre 2026" title="Resumen del mes" copy="Todo lo importante, de un vistazo." />
+      <SectionHeader eyebrow={new Intl.DateTimeFormat("es-CL", { month: "long", year: "numeric" }).format(new Date())} title="Resumen del mes" copy="Todo lo importante, de un vistazo." />
       <div className="grid gap-3 sm:grid-cols-3">
-        <Metric label="Entregado" value="$482.600" icon={ShoppingBag} />
-        <Metric label="Cobrado" value="$364.200" icon={CheckCircle2} success />
-        <Metric label="Por cobrar" value="$118.400" icon={CreditCard} warning />
+         <Metric label="Entregado" value={`$${delivered.toLocaleString("es-CL")}`} icon={ShoppingBag} />
+         <Metric label="Cobrado" value={`$${paid.toLocaleString("es-CL")}`} icon={CheckCircle2} success />
+         <Metric label="Por cobrar" value={`$${(delivered - paid).toLocaleString("es-CL")}`} icon={CreditCard} warning />
       </div>
       <div className="mt-5 grid gap-5 lg:grid-cols-2">
         <section className="surface-card p-5">
           <div className="mb-6 flex items-center justify-between"><div><h2 className="font-display text-lg font-bold">Ventas por producto</h2><p className="text-xs text-muted-foreground">Unidades entregadas</p></div><LayoutGrid className="size-5 text-primary" /></div>
           <div className="flex h-48 items-end justify-around gap-3 border-b border-border px-2">
-            {sweets.map((sweet, index) => (
+            {data.products.map((sweet: any) => (
               <div key={sweet.id} className="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                <span className="text-xs font-bold">{productBars[index]}</span>
-                <div className="w-full max-w-12 rounded-t-lg bg-primary transition-all duration-700" style={{ height: `${productBars[index]}%` }} />
-                <span className="h-8 text-center text-[10px] leading-tight text-muted-foreground">{sweet.shortName}</span>
+                <span className="text-xs font-bold">{productCounts.get(sweet.id) ?? 0}</span>
+                <div className="w-full max-w-12 rounded-t-lg bg-primary transition-all duration-700" style={{ height: `${((productCounts.get(sweet.id) ?? 0) / maxProduct) * 100}%` }} />
+                <span className="h-8 text-center text-[10px] leading-tight text-muted-foreground">{sweet.short_name}</span>
               </div>
             ))}
           </div>
@@ -313,20 +349,21 @@ function SummaryView() {
         <section className="surface-card p-5">
           <div className="mb-6"><h2 className="font-display text-lg font-bold">Movimiento por día</h2><p className="text-xs text-muted-foreground">Última semana</p></div>
           <div className="flex h-48 items-end gap-2 border-b border-border px-1">
-            {dayBars.map((bar, index) => <div key={index} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="w-full rounded-t-md bg-brand-soft transition-all duration-700" style={{ height: `${bar}%` }} /><span className="text-[10px] text-muted-foreground">{["L", "M", "M", "J", "V", "S", "D"][index]}</span></div>)}
+            {[0,1,2,3,4,5,6].map((day) => { const count = deliveries.filter((d: any) => new Date(`${d.delivered_on}T12:00:00`).getDay() === day).length; return <div key={day} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="w-full rounded-t-md bg-brand-soft transition-all duration-700" style={{ height: `${Math.max(4, count * 20)}%` }} /><span className="text-[10px] text-muted-foreground">{["D", "L", "M", "M", "J", "V", "S"][day]}</span></div>; })}
           </div>
         </section>
       </div>
       <section className="mt-5 surface-card p-5">
         <h2 className="font-display text-lg font-bold">Los que más se acaban</h2>
         <p className="mb-4 text-xs text-muted-foreground">Avisos recibidos este mes</p>
-        {[{ name: "Cuchuflí", count: 12 }, { name: "Mini donas", count: 8 }, { name: "Alfajores", count: 5 }].map((item, index) => (
-          <div key={item.name} className="flex items-center gap-3 border-t border-border py-3 first:border-0">
+         {ranking.slice(0, 3).map(([name, count]: any, index: number) => (
+           <div key={name} className="flex items-center gap-3 border-t border-border py-3 first:border-0">
             <span className={cn("grid size-8 place-items-center rounded-full font-display text-sm font-bold", index === 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{index + 1}</span>
-            <span className="flex-1 font-semibold">{item.name}</span><span className="text-sm text-muted-foreground">{item.count} avisos</span>
+             <span className="flex-1 font-semibold">{name}</span><span className="text-sm text-muted-foreground">{count} avisos</span>
           </div>
         ))}
       </section>
+      <AiAdvisor />
     </div>
   );
 }
