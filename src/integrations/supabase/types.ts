@@ -14,13 +14,218 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      deliveries: {
+        Row: {
+          created_at: string
+          delivered_on: string
+          id: string
+          note: string | null
+          owner_id: string
+          paid_amount: number
+          payment_status: string
+          total: number
+        }
+        Insert: {
+          created_at?: string
+          delivered_on?: string
+          id?: string
+          note?: string | null
+          owner_id: string
+          paid_amount?: number
+          payment_status?: string
+          total?: number
+        }
+        Update: {
+          created_at?: string
+          delivered_on?: string
+          id?: string
+          note?: string | null
+          owner_id?: string
+          paid_amount?: number
+          payment_status?: string
+          total?: number
+        }
+        Relationships: []
+      }
+      delivery_items: {
+        Row: {
+          delivery_id: string
+          id: string
+          product_id: string
+          quantity: number
+          subtotal: number | null
+          unit_price: number
+        }
+        Insert: {
+          delivery_id: string
+          id?: string
+          product_id: string
+          quantity: number
+          subtotal?: number | null
+          unit_price: number
+        }
+        Update: {
+          delivery_id?: string
+          id?: string
+          product_id?: string
+          quantity?: number
+          subtotal?: number | null
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delivery_items_delivery_id_fkey"
+            columns: ["delivery_id"]
+            isOneToOne: false
+            referencedRelation: "deliveries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "delivery_items_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      owner_access: {
+        Row: {
+          created_at: string
+          email: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      products: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          name: string
+          owner_id: string
+          price: number
+          short_name: string
+          sort_order: number
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name: string
+          owner_id: string
+          price: number
+          short_name: string
+          sort_order?: number
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name?: string
+          owner_id?: string
+          price?: number
+          short_name?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
+      stock_alerts: {
+        Row: {
+          attended_at: string | null
+          created_at: string
+          id: string
+          note: string | null
+          owner_id: string
+          product_id: string | null
+          product_name: string
+          status: string
+          whatsapp_status: string
+        }
+        Insert: {
+          attended_at?: string | null
+          created_at?: string
+          id?: string
+          note?: string | null
+          owner_id: string
+          product_id?: string | null
+          product_name: string
+          status?: string
+          whatsapp_status?: string
+        }
+        Update: {
+          attended_at?: string | null
+          created_at?: string
+          id?: string
+          note?: string | null
+          owner_id?: string
+          product_id?: string | null
+          product_name?: string
+          status?: string
+          whatsapp_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stock_alerts_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      store_settings: {
+        Row: {
+          cashier_token_hash: string
+          created_at: string
+          id: string
+          notification_channel: string
+          owner_id: string
+          store_name: string
+          updated_at: string
+          whatsapp_number: string
+          workers: string[]
+        }
+        Insert: {
+          cashier_token_hash: string
+          created_at?: string
+          id?: string
+          notification_channel?: string
+          owner_id: string
+          store_name?: string
+          updated_at?: string
+          whatsapp_number?: string
+          workers?: string[]
+        }
+        Update: {
+          cashier_token_hash?: string
+          created_at?: string
+          id?: string
+          notification_channel?: string
+          owner_id?: string
+          store_name?: string
+          updated_at?: string
+          whatsapp_number?: string
+          workers?: string[]
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      is_owner: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
       [_ in never]: never
